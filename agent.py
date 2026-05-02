@@ -37,64 +37,77 @@ Do not use complex HTML or advanced markdown features that a basic terminal cann
 """
 
 def _fix_json_string(json_str: str) -> str:
-    """Fix common JSON errors, especially unescaped backslashes and raw newlines."""
-    # Fix raw newlines inside strings (JSON doesn't allow them)
-    # This is a bit tricky, but we can try to escape them if they are between quotes
+    """Safely escape raw newlines and fix backslashes without corrupting existing ones."""
+    # Fix raw newlines
     fixed = json_str.replace('\n', '\\n').replace('\r', '\\r')
     
-    # Fix single backslashes in paths: "C:\Users" -> "C:\\Users"
-    # But don't break existing valid escapes like \" or \\ or \n
-    fixed = re.sub(r'(?<!\\)\\(?!["\\/bfnrt]|u[0-9a-fA-F]{4})', r'\\\\', fixed)
-    return fixed
+    # Simple backslash fix: Only escape backslashes that are NOT followed by a valid JSON escape char
+    # We'll use a simpler approach: if a backslash is followed by something that isn't a valid escape, we escape it.
+    valid_escapes = '"\\/bfnrtu'
+    result = []
+    i = 0
+    while i < len(fixed):
+        if fixed[i] == '\\':
+            if i + 1 < len(fixed) and fixed[i+1] in valid_escapes:
+                # Keep valid escape
+                result.append(fixed[i:i+2])
+                i += 2
+                continue
+            else:
+                # Escape the naked backslash
+                result.append('\\\\')
+                i += 1
+                continue
+        result.append(fixed[i])
+        i += 1
+    return "".join(result)
 
 def parse_actions(text: str) -> list:
-    """Ultra-robust parser for CALL: tool({...})"""
+    """Simplified, highly surgical parser for CALL: tool(...)"""
     actions = []
     
-    # 1. Try to find content inside [ACTION] blocks
-    action_content = ""
-    matches = list(re.finditer(r'\[ACTION\](.*?)(?:\[/ACTION\]|$)', text, re.DOTALL | re.IGNORECASE))
-    for m in matches:
-        action_content += m.group(1) + "\n"
-    
-    # 2. Fallback: if no [ACTION] tags or no tools found in them, search the whole text
-    if not action_content:
-        action_content = text
-
-    starts = [m.start() for m in re.finditer(r'CALL:\s*\w+\s*\(', action_content, re.IGNORECASE)]
+    # 1. Clean the text and find all CALL: instances
+    starts = [m.start() for m in re.finditer(r'CALL:\s*(\w+)\s*\(', text, re.IGNORECASE)]
     
     for i, start_pos in enumerate(starts):
-        end_boundary = starts[i+1] if i+1 < len(starts) else len(action_content)
-        chunk = action_content[start_pos:end_boundary].strip()
+        # We find the matching closing parenthesis for this specific CALL
+        # This is much safer than regex for nested structures or trailing junk
+        content_from_call = text[start_pos:]
+        first_paren = content_from_call.find('(')
+        if first_paren == -1: continue
         
-        # Match CALL: name(args)
-        # We look for the FIRST ( and the LAST ) to isolate the arguments
-        first_paren = chunk.find('(')
-        last_paren = chunk.rfind(')')
+        # Balance parentheses to find the correct end
+        depth = 0
+        last_paren = -1
+        for j in range(first_paren, len(content_from_call)):
+            if content_from_call[j] == '(': depth += 1
+            elif content_from_call[j] == ')':
+                depth -= 1
+                if depth == 0:
+                    last_paren = j
+                    break
         
-        if first_paren != -1 and last_paren != -1:
-            tool_name_match = re.search(r'CALL:\s*(\w+)', chunk[:first_paren], re.IGNORECASE)
+        if last_paren != -1:
+            tool_name_match = re.search(r'CALL:\s*(\w+)', content_from_call[:first_paren], re.IGNORECASE)
             if tool_name_match:
                 tool_name = tool_name_match.group(1)
-                args_raw = chunk[first_paren+1:last_paren].strip()
+                args_raw = content_from_call[first_paren+1:last_paren].strip()
                 
-                # If it's a raw string like "/path/to/dir" or "C:\path", wrap it
-                # We check if it starts with " but doesn't look like a JSON object
+                # Auto-wrap positional strings (especially for Linux paths with spaces)
                 if not args_raw.startswith('{'):
-                    # If it's a single quoted/unquoted string, it's likely positional 'path'
-                    # Or a positional string followed by others. We'll try to wrap it as 'path'
+                    # If it's a quoted string or contains path-like separators
                     if (args_raw.startswith('"') and args_raw.endswith('"')) or '/' in args_raw or '\\' in args_raw:
-                        # Strip quotes if present
-                        clean_val = args_raw.strip('"\'')
-                        args_raw = json.dumps({"path": clean_val})
-                    elif ':' in args_raw: # Windows style path-like arg
+                        val = args_raw.strip('"\'')
+                        args_raw = json.dumps({"path": val})
+                    elif ':' in args_raw:
                         args_raw = "{" + args_raw + "}"
                 
                 try:
-                    args = json.loads(_fix_json_string(args_raw))
+                    fixed_args = _fix_json_string(args_raw)
+                    args = json.loads(fixed_args)
                     actions.append({"tool": tool_name, "args": args})
-                except:
-                    # Final attempt: search for any { ... } inside
+                except Exception as e:
+                    # Final fallback: try to find anything that looks like JSON inside
                     brace_match = re.search(r'(\{.*\})', args_raw, re.DOTALL)
                     if brace_match:
                         try:

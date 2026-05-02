@@ -143,7 +143,10 @@ TOOLS = [
 ]
 
 def handle_tool_call(tool_name: str, args: Dict[str, Any]) -> Any:
-    """Dispatcher for tool calls"""
+    """Dispatcher for tool calls with internal logging for debugging."""
+    # Internal log to router.log (since we redirect stderr/stdout)
+    print(f"[DEBUG] Tool Call: {tool_name}({json.dumps(args)}) | CWD: {WORKING_DIR}")
+    
     if tool_name == "navigate": return navigate(**args)
     if tool_name == "list_files": return list_files(**args)
     if tool_name == "read_file": return read_file(**args)
