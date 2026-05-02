@@ -1,0 +1,32 @@
+# ZeroBound CLI Git Ignore
+
+# Virtual Environment
+venv/
+.env
+
+# Python Cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Local Database and Logs
+history.db
+router.log
+
+# Playwright / DeepSeek Profiles (Sensitive data)
+profiles/
+**/state.json
+
+# User Content / Project-specific artifacts (Requested)
+*.txt
+*.png
+*.jpg
+*.jpeg
+*.svg
+*.pdf
+ET_project_presentation*
+
+# OS specific
+.DS_Store
+Thumbs.db
