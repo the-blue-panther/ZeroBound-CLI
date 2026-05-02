@@ -4,6 +4,39 @@ Welcome to **ZeroBound CLI**, a lightweight, fully self-contained terminal versi
 
 ---
 
+## ⚡ Quick Start (End-to-End)
+
+Follow these 4 steps to get ZeroBound CLI running on any new machine:
+
+1. **Clone the repository:**
+   ```bash
+   git clone https://github.com/the-blue-panther/ZeroBound-CLI.git
+   cd ZeroBound-CLI
+   ```
+
+2. **Initialize Environment & Dependencies:**
+   Run the launcher (it will auto-install everything):
+   - **Windows:** `.\zb.bat`
+   - **Linux/Mac:** `chmod +x zb.sh && ./zb.sh`
+   *(Wait for it to finish installing, then exit by typing `exit`)*.
+
+3. **One-Time DeepSeek Login:**
+   ```bash
+   # Windows
+   .\venv\Scripts\activate
+   # Linux/Mac
+   source venv/bin/activate
+
+   python router/manual_login.py deepseek
+   ```
+   *Log in to the browser window that pops up, then close it once the chat appears.*
+
+4. **Start the Agent:**
+   - **Windows:** `.\zb.bat`
+   - **Linux/Mac:** `./zb.sh`
+
+---
+
 ## 🛠️ First-Time Setup (On a New Machine)
 
 Because this CLI uses the official DeepSeek Web UI under the hood, you need to log in to DeepSeek **just once** on any new machine.
