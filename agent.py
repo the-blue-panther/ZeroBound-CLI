@@ -13,10 +13,14 @@ os.environ["OPENAI_API_KEY"] = "sk-zerobound"
 def get_system_prompt() -> str:
     system_os = platform.system()
     release = platform.release()
+    cwd = os.getcwd()
+    home = os.path.expanduser("~")
     
     return f"""--- IDENTITY ---
 You are ZeroBound CLI, a lightweight terminal-based autonomous agent.
 Current Host OS: {system_os} {release}
+Current Working Directory: {cwd}
+User Home Directory: {home}
 You MUST adapt your terminal commands and file paths for {system_os}.
 
 --- RESPONSE MODES ---
