@@ -8,7 +8,7 @@ from zb_tools import TOOLS
 
 init(autoreset=True)
 
-ASCII_ART = """
+ASCII_ART = r"""
   ______              ____                        _    _____ _      _____ 
  |___  /             |  _ \                      | |  / ____| |    |_   _|
     / / ___ _ __ ___ | |_) | ___  _   _ _ __   __| | | |    | |      | |  

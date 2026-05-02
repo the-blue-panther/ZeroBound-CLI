@@ -155,6 +155,25 @@ def _fix_json_string(json_str: str) -> str:
         i += 1
     return "".join(result)
 
+async def fetch_current_url() -> str:
+    """Helper to get the current browser URL from the router."""
+    try:
+        async with httpx.AsyncClient() as client:
+            resp = await client.get(f"{API_BASE}/current_url", timeout=2.0)
+            if resp.status_code == 200:
+                return resp.json().get("url")
+    except:
+        pass
+    return None
+
+async def navigate_to_url(url: str):
+    """Helper to force the browser to a specific URL (used for session resume)."""
+    try:
+        async with httpx.AsyncClient() as client:
+            await client.post(f"{API_BASE}/navigate", json={"url": url}, timeout=10.0)
+    except:
+        pass
+
 async def chat_with_agent(messages: list, print_callback) -> dict:
     # Ensure system prompt is first
     if not messages or messages[0]["role"] != "system":
