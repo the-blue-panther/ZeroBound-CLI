@@ -65,38 +65,42 @@ def parse_actions(text: str) -> list:
     
     for i, start_pos in enumerate(starts):
         end_boundary = starts[i+1] if i+1 < len(starts) else len(action_content)
-        chunk = action_content[start_pos:end_boundary]
+        chunk = action_content[start_pos:end_boundary].strip()
         
         # Match CALL: name(args)
-        # We use a non-greedy capture for args until the LAST matching parenthesis in the chunk
-        match = re.search(r'CALL:\s*(\w+)\s*\(\s*(.*)\)\s*$', chunk.strip(), re.DOTALL | re.IGNORECASE)
-        if match:
-            tool_name = match.group(1)
-            args_raw = match.group(2).strip()
-            
-            # If the greedy capture ate too much (e.g. into the next line's junk), 
-            # find the first valid JSON ending
-            if args_raw.startswith('{'):
-                # Basic balance check or find last }
-                last_brace = args_raw.rfind('}')
-                if last_brace != -1:
-                    args_raw = args_raw[:last_brace+1]
-            
-            # Auto-wrap if it looks like positional/missing braces
-            if not args_raw.startswith('{') and ':' in args_raw:
-                args_raw = "{" + args_raw + "}"
-            
-            try:
-                args = json.loads(_fix_json_string(args_raw))
-                actions.append({"tool": tool_name, "args": args})
-            except:
-                # Fuzzy brace recovery for the most desperate cases
-                brace_match = re.search(r'(\{.*\})', args_raw, re.DOTALL)
-                if brace_match:
-                    try:
-                        args = json.loads(_fix_json_string(brace_match.group(1)))
-                        actions.append({"tool": tool_name, "args": args})
-                    except: pass
+        # We look for the FIRST ( and the LAST ) to isolate the arguments
+        first_paren = chunk.find('(')
+        last_paren = chunk.rfind(')')
+        
+        if first_paren != -1 and last_paren != -1:
+            tool_name_match = re.search(r'CALL:\s*(\w+)', chunk[:first_paren], re.IGNORECASE)
+            if tool_name_match:
+                tool_name = tool_name_match.group(1)
+                args_raw = chunk[first_paren+1:last_paren].strip()
+                
+                # If it's a raw string like "/path/to/dir" or "C:\path", wrap it
+                # We check if it starts with " but doesn't look like a JSON object
+                if not args_raw.startswith('{'):
+                    # If it's a single quoted/unquoted string, it's likely positional 'path'
+                    # Or a positional string followed by others. We'll try to wrap it as 'path'
+                    if (args_raw.startswith('"') and args_raw.endswith('"')) or '/' in args_raw or '\\' in args_raw:
+                        # Strip quotes if present
+                        clean_val = args_raw.strip('"\'')
+                        args_raw = json.dumps({"path": clean_val})
+                    elif ':' in args_raw: # Windows style path-like arg
+                        args_raw = "{" + args_raw + "}"
+                
+                try:
+                    args = json.loads(_fix_json_string(args_raw))
+                    actions.append({"tool": tool_name, "args": args})
+                except:
+                    # Final attempt: search for any { ... } inside
+                    brace_match = re.search(r'(\{.*\})', args_raw, re.DOTALL)
+                    if brace_match:
+                        try:
+                            args = json.loads(_fix_json_string(brace_match.group(1)))
+                            actions.append({"tool": tool_name, "args": args})
+                        except: pass
     return actions
 
 def parse_report(text: str) -> str:

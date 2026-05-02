@@ -19,28 +19,38 @@ def navigate(path: str) -> Dict[str, Any]:
         WORKING_DIR = new_path
         os.chdir(WORKING_DIR) # Also change process CWD for convenience
         return {"status": "success", "current_directory": WORKING_DIR}
-    return {"error": f"Directory not found: {new_path}"}
+    # If it failed, let's be descriptive
+    exists = os.path.exists(new_path)
+    return {"error": f"Navigation failed. Path {'exists but is not a directory' if exists else 'does not exist'}: {new_path}"}
 
 def list_files(path: str = ".") -> Dict[str, Any]:
     target = _resolve_path(path)
     if not os.path.exists(target):
-        return {"error": f"Path not found: {target}"}
+        return {"error": f"List failed. Path not found: {target}"}
     if not os.path.isdir(target):
-        return {"error": f"Path is not a directory: {target}"}
+        # If it's a file, just list the file itself
+        return {"files": [{
+            "name": os.path.basename(target),
+            "type": "file",
+            "size": os.path.getsize(target)
+        }]}
     
     try:
         items = os.listdir(target)
         results = []
         for item in items:
-            full_path = os.path.join(target, item)
-            results.append({
-                "name": item,
-                "type": "folder" if os.path.isdir(full_path) else "file",
-                "size": os.path.getsize(full_path) if os.path.isfile(full_path) else 0
-            })
+            try:
+                full_path = os.path.join(target, item)
+                results.append({
+                    "name": item,
+                    "type": "folder" if os.path.isdir(full_path) else "file",
+                    "size": os.path.getsize(full_path) if os.path.isfile(full_path) else 0
+                })
+            except (PermissionError, OSError):
+                continue # Skip items we can't access
         return {"files": results}
     except Exception as e:
-        return {"error": str(e)}
+        return {"error": f"OS Error listing {target}: {str(e)}"}
 
 def read_file(path: str) -> Dict[str, Any]:
     target = _resolve_path(path)
