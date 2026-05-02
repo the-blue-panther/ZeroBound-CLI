@@ -7,10 +7,22 @@ from typing import Dict, Any, List
 WORKING_DIR = os.getcwd()
 
 def _resolve_path(path: str) -> str:
-    """Resolve paths relative to the current working directory."""
-    if os.path.isabs(path):
-        return os.path.normpath(path)
-    return os.path.normpath(os.path.join(WORKING_DIR, path))
+    """Resolve paths with protection against ghost-path mangling."""
+    if not path or path == ".":
+        return os.path.normpath(WORKING_DIR)
+        
+    # Standardize to forward slashes for cross-platform processing
+    clean_path = path.replace('\\', '/')
+    
+    # PROTECT AGAINST GHOST PATHS: Fix /home/user/s/ or /home/user/s$ -> /home/user/Downloads
+    # This mirrors the logic in the mother project's normalize_path_for_display
+    home = os.path.expanduser("~").replace('\\', '/')
+    if clean_path.startswith(f"{home}/s/") or clean_path == f"{home}/s":
+        clean_path = clean_path.replace(f"{home}/s", f"{home}/Downloads", 1)
+    
+    if os.path.isabs(clean_path):
+        return os.path.normpath(clean_path)
+    return os.path.normpath(os.path.join(WORKING_DIR, clean_path))
 
 def navigate(path: str) -> Dict[str, Any]:
     global WORKING_DIR

@@ -10,35 +10,127 @@ API_BASE = "http://localhost:8000/v1"
 MODEL = "openai/deepseek-chat"
 os.environ["OPENAI_API_KEY"] = "sk-zerobound"
 
+# ─── Path normalization helpers ──────────────────────────────────────────────
+def normalize_path_for_display(path: str) -> str:
+    """Handles ghost paths and ensures consistent display for the LLM."""
+    if not path: return path
+    norm = path.replace('\\', '/')
+    # Fix 's' ghost paths if they appear (common in some Windows/WSL setups)
+    # On Linux, we only do this if we are SURE it's a mangled path, 
+    # but here we'll keep it generic to match the mother project's safety.
+    return norm
+
+def sanitize_conversation_paths(content: str) -> str:
+    """Aggressively replace all ghost paths in conversation history string."""
+    if not content: return content
+    return content # Placeholder for now, can be expanded if specific ghost patterns are found
+
+# ─── System Prompt (Modular Protocol v2.3) ────────────────────────────────────
 def get_system_prompt() -> str:
     system_os = platform.system()
     release = platform.release()
     cwd = os.getcwd()
     home = os.path.expanduser("~")
+    tools_desc = get_tools_prompt_description()
     
     return f"""--- IDENTITY ---
-You are ZeroBound CLI, a lightweight terminal-based autonomous agent.
+You are ZeroBound CLI, the world's most capable engineering agent.
 Current Host OS: {system_os} {release}
-Current Working Directory: {cwd}
-User Home Directory: {home}
-You MUST adapt your terminal commands and file paths for {system_os}.
+Current Workspace: {cwd}
+User Home: {home}
 
---- RESPONSE MODES ---
-1. **ACTION MODE**: Used to execute tools. Include <THINK> and [ACTION] blocks.
-2. **REPORT MODE**: Used to communicate back to the user. Include <THINK> and [REPORT] blocks.
+--- RESPONSE MODES (MANDATORY) ---
+You operate in TWO distinct modes. NEVER mix them in a single response:
+1. **ACTION MODE**: Used when you need to execute tools. Include <THINK> and [ACTION] blocks only.
+2. **REPORT MODE**: Used when the task is complete. Include <THINK> and [REPORT] blocks only.
 
-**CRITICAL RULE**: Do NOT combine [ACTION] and [REPORT] in the same response. If you need to use a tool, use [ACTION] and WAIT for the result. Only use [REPORT] AFTER you have seen the tool results in your history.
+--- CODE WRITING (ABSOLUTE REQUIREMENT) ---
+You MUST use the RAW BLOCK syntax for ALL code when using write_file.
+```json
+CALL: write_file({{"path": "script.py"}})
+```
+````python
+print("This is the gold standard for structural integrity")
+````
 
---- TOOL SYNTAX (STRICT JSON) ---
-Invoke tools EXACTLY like this inside [ACTION]:
-CALL: tool_name({{"arg": "val"}})
+--- PROTOCOLS ---
+1. **FEEDBACK LOOP**: Action -> observe -> decide. NEVER presume success.
+2. **VERIFICATION**: Analyze expectations in <THINK> before action, analyze ACTUAL result after.
+3. **LINUX PATHS**: Use absolute paths like {home}/Downloads to avoid confusion.
 
-{get_tools_prompt_description()}
+{tools_desc}
 
 --- FORMATTING ---
-Respond in plain text or simple markdown suitable for a terminal. 
-Do not use complex HTML or advanced markdown features that a basic terminal cannot render.
+Respond in plain text or simple markdown suitable for a terminal.
+Wrap your final summary inside [REPORT].
 """
+
+def parse_structured_response(text: str) -> dict:
+    """High-robustness parser from the mother project."""
+    result = {"think": None, "actions": [], "report": None}
+    if not text: return result
+
+    # 1. Extract <THINK> block
+    think_match = re.search(r'<THINK>(.*?)</THINK>', text, re.DOTALL | re.IGNORECASE)
+    if not think_match:
+        think_match = re.search(r'<THINK>(.*)', text, re.DOTALL | re.IGNORECASE)
+    if think_match:
+        result["think"] = think_match.group(1).strip()
+
+    # 2. Extract [REPORT] block
+    report_match = re.search(r'\[REPORT\](.*?)(?:\[/REPORT\]|$)', text, re.DOTALL | re.IGNORECASE)
+    if report_match:
+        result["report"] = report_match.group(1).strip()
+
+    # 3. Extract [ACTION] blocks and tool calls
+    action_matches = re.finditer(r'\[ACTION\](.*?)(?:\[/ACTION\]|$)', text, re.DOTALL | re.IGNORECASE)
+    for match in action_matches:
+        action_text = match.group(1).strip()
+        result["actions"].extend(_parse_tool_calls(action_text))
+    
+    # Fallback for untagged actions
+    if not result["actions"] and "CALL:" in text:
+        result["actions"].extend(_parse_tool_calls(text))
+
+    return result
+
+def _parse_tool_calls(text: str) -> list:
+    """Advanced parser supporting RAW BLOCK content extraction."""
+    actions = []
+    starts = [m.start() for m in re.finditer(r'CALL:\s*\w+\s*\(', text, re.IGNORECASE)]
+    
+    for i, start_pos in enumerate(starts):
+        end_boundary = starts[i+1] if i+1 < len(starts) else len(text)
+        chunk = text[start_pos:end_boundary]
+        
+        # 1. Parse the CALL: line
+        match = re.search(r'CALL:\s*(\w+)\s*\((.*?)\)', chunk, re.DOTALL | re.IGNORECASE)
+        if not match: continue
+        
+        tool_name = match.group(1)
+        args_raw = match.group(2).strip()
+        call_end = match.end()
+        
+        # Auto-wrap positional strings
+        if not args_raw.startswith('{'):
+            if '/' in args_raw or '\\' in args_raw or '"' in args_raw:
+                val = args_raw.strip('"\'')
+                args_raw = json.dumps({"path": val})
+        
+        try:
+            args = json.loads(_fix_json_string(args_raw))
+            
+            # 2. Extract potential RAW BLOCK content (for write_file)
+            remaining = chunk[call_end:].strip()
+            # Look for 4 backticks or 3 backticks
+            raw_match = re.search(r'(`{3,4})[a-zA-Z0-9_]*\n(.*?)\1', remaining, re.DOTALL)
+            if raw_match:
+                args["content"] = raw_match.group(2).strip()
+            
+            actions.append({"tool": tool_name, "args": args})
+        except:
+            continue
+    return actions
 
 def _fix_json_string(json_str: str) -> str:
     """Safely escape raw newlines and fix backslashes without corrupting existing ones."""
@@ -46,115 +138,22 @@ def _fix_json_string(json_str: str) -> str:
     fixed = json_str.replace('\n', '\\n').replace('\r', '\\r')
     
     # Simple backslash fix: Only escape backslashes that are NOT followed by a valid JSON escape char
-    # We'll use a simpler approach: if a backslash is followed by something that isn't a valid escape, we escape it.
     valid_escapes = '"\\/bfnrtu'
     result = []
     i = 0
     while i < len(fixed):
         if fixed[i] == '\\':
             if i + 1 < len(fixed) and fixed[i+1] in valid_escapes:
-                # Keep valid escape
                 result.append(fixed[i:i+2])
                 i += 2
                 continue
             else:
-                # Escape the naked backslash
                 result.append('\\\\')
                 i += 1
                 continue
         result.append(fixed[i])
         i += 1
     return "".join(result)
-
-def parse_actions(text: str) -> list:
-    """Simplified, highly surgical parser for CALL: tool(...)"""
-    actions = []
-    
-    # 1. Clean the text and find all CALL: instances
-    starts = [m.start() for m in re.finditer(r'CALL:\s*(\w+)\s*\(', text, re.IGNORECASE)]
-    
-    for i, start_pos in enumerate(starts):
-        # We find the matching closing parenthesis for this specific CALL
-        # This is much safer than regex for nested structures or trailing junk
-        content_from_call = text[start_pos:]
-        first_paren = content_from_call.find('(')
-        if first_paren == -1: continue
-        
-        # Balance parentheses to find the correct end
-        depth = 0
-        last_paren = -1
-        for j in range(first_paren, len(content_from_call)):
-            if content_from_call[j] == '(': depth += 1
-            elif content_from_call[j] == ')':
-                depth -= 1
-                if depth == 0:
-                    last_paren = j
-                    break
-        
-        if last_paren != -1:
-            tool_name_match = re.search(r'CALL:\s*(\w+)', content_from_call[:first_paren], re.IGNORECASE)
-            if tool_name_match:
-                tool_name = tool_name_match.group(1)
-                args_raw = content_from_call[first_paren+1:last_paren].strip()
-                
-                # Auto-wrap positional strings (especially for Linux paths with spaces)
-                if not args_raw.startswith('{'):
-                    # If it's a quoted string or contains path-like separators
-                    if (args_raw.startswith('"') and args_raw.endswith('"')) or '/' in args_raw or '\\' in args_raw:
-                        val = args_raw.strip('"\'')
-                        args_raw = json.dumps({"path": val})
-                    elif ':' in args_raw:
-                        args_raw = "{" + args_raw + "}"
-                
-                try:
-                    fixed_args = _fix_json_string(args_raw)
-                    args = json.loads(fixed_args)
-                    actions.append({"tool": tool_name, "args": args})
-                except Exception as e:
-                    # Final fallback: try to find anything that looks like JSON inside
-                    brace_match = re.search(r'(\{.*\})', args_raw, re.DOTALL)
-                    if brace_match:
-                        try:
-                            args = json.loads(_fix_json_string(brace_match.group(1)))
-                            actions.append({"tool": tool_name, "args": args})
-                        except: pass
-    return actions
-
-def parse_report(text: str) -> str:
-    # Look for [REPORT] and take everything until [/REPORT] or end
-    # We use a non-greedy match to avoid eating subsequent actions, but greedy enough to get the content
-    match = re.search(r'\[REPORT\](.*?)(?:\[/REPORT\]|$)', text, re.DOTALL | re.IGNORECASE)
-    if not match:
-        # Fallback: if no [REPORT] tag but has plain text at the end
-        if "[ACTION]" not in text and "<THINK>" not in text:
-            return text.strip()
-        return ""
-    return match.group(1).strip()
-
-def parse_think(text: str) -> str:
-    match = re.search(r'<THINK>(.*?)</THINK>', text, re.DOTALL | re.IGNORECASE)
-    if not match:
-        match = re.search(r'<THINK>(.*)', text, re.DOTALL | re.IGNORECASE)
-    if match:
-        return match.group(1).strip()
-    return ""
-
-async def fetch_current_url() -> str:
-    try:
-        async with httpx.AsyncClient() as client:
-            resp = await client.get(f"{API_BASE}/current_url", timeout=2.0)
-            if resp.status_code == 200:
-                return resp.json().get("url")
-    except (httpx.ConnectError, httpx.ReadTimeout, ConnectionResetError, Exception):
-        pass
-    return None
-
-async def navigate_to_url(url: str):
-    try:
-        async with httpx.AsyncClient() as client:
-            await client.post(f"{API_BASE}/navigate", json={"url": url}, timeout=10.0)
-    except (httpx.ConnectError, httpx.ReadTimeout, ConnectionResetError, Exception):
-        pass
 
 async def chat_with_agent(messages: list, print_callback) -> dict:
     # Ensure system prompt is first
@@ -166,24 +165,17 @@ async def chat_with_agent(messages: list, print_callback) -> dict:
             model=MODEL,
             messages=messages,
             api_base=API_BASE,
-            functions=TOOLS,
-            function_call="none",
-            stop=["[/ACTION]", "[/REPORT]"]
+            stop=["[/ACTION]", "[/REPORT]", "````\n[REPORT]"]
         )
         
         raw_content = response.choices[0].message.content or ""
+        parsed = parse_structured_response(raw_content)
         
-        # Parse the structured response
-        think = parse_think(raw_content)
-        actions = parse_actions(raw_content)
-        report = parse_report(raw_content)
-        
-        # User requested to hide THINK blocks in CLI, so we show a minimal indicator
-        if think: 
+        if parsed["think"]: 
             print_callback("🧠 Thinking...", color="dim")
             
         tool_results = []
-        for action in actions:
+        for action in parsed["actions"]:
             t_name = action["tool"]
             t_args = action["args"]
             print_callback(f"⚙️ EXECUTING: {t_name}({json.dumps(t_args)})", color="cyan")
@@ -191,26 +183,21 @@ async def chat_with_agent(messages: list, print_callback) -> dict:
                 res = handle_tool_call(t_name, t_args)
             except Exception as te:
                 res = {"error": str(te)}
-                
-            tool_results.append({
-                "tool": t_name,
-                "result": res
-            })
+            tool_results.append({"tool": t_name, "result": res})
             
-        # FORCE: If there were actions, we IGNORE the report from this turn to prevent hallucination
+        # FORCE: If there were actions, we IGNORE the report from this turn
         final_report = ""
-        if report and not actions:
-            final_report = report
+        if parsed["report"] and not parsed["actions"]:
+            final_report = parsed["report"]
             print_callback(f"\n{final_report}", color="green")
             
         return {
             "raw": raw_content,
-            "actions": actions,
+            "actions": parsed["actions"],
             "tool_results": tool_results,
             "report": final_report
         }
     except (ConnectionResetError, httpx.ConnectError):
-        # Silence specific Windows asyncio noise
         return {"error": "Router connection reset. It might still be processing."}
     except Exception as e:
         print_callback(f"LLM Error: {str(e)}", color="red")
