@@ -20,6 +20,7 @@ profiles/
 
 # User Content / Project-specific artifacts (Requested)
 *.txt
+!requirements.txt
 *.png
 *.jpg
 *.jpeg
