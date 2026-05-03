@@ -25,8 +25,8 @@ profiles/
 *.jpg
 *.jpeg
 *.svg
-*.pdf
-ET_project_presentation*
+# Allow the specific presentation PDF
+!ET_project_presentation_slide.pdf
 
 # OS specific
 .DS_Store
